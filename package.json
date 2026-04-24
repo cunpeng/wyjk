@@ -1,0 +1,16 @@
+{
+  "name": "wyjk-web-monitor",
+  "version": "1.0.0",
+  "description": "网页变动监控器 - Docker版",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["web", "monitor", "monitoring", "docker"],
+  "author": "",
+  "license": "MIT"
+}

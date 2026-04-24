@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover, maximum-scale=1.0, minimum-scale=1.0">
+    <title>网页变动监控器 · 服务器版</title>
+    <style>
+        :root {
+            --bg: #f5f6f8;
+            --card-bg: #ffffff;
+            --text: #1a1a2e;
+            --text-secondary: #5a5a7a;
+            --border: #e2e5ea;
+            --primary: #4f6ef7;
+            --primary-hover: #3b54d4;
+            --primary-light: #eef1fe;
+            --success: #10b981;
+            --success-light: #ecfdf5;
+            --warning: #f59e0b;
+            --warning-light: #fffbeb;
+            --danger: #ef4444;
+            --danger-light: #fef2f2;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+            --shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+            --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12), 0 4px 12px rgba(0, 0, 0, 0.06);
+            --radius-sm: 8px;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            --font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', 'Monaco', 'Noto Sans Mono', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f1117;
+                --card-bg: #1a1d27;
+                --text: #e8e8f0;
+                --text-secondary: #a0a4b8;
+                --border: #2a2d3a;
+                --primary: #6b8aff;
+                --primary-hover: #8a9fff;
+                --primary-light: #1a1f35;
+                --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+                --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+                --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+            }
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html {
+            font-size: 16px;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            min-height: 100dvh;
+            line-height: 1.5;
+            padding: 12px;
+            padding-bottom: env(safe-area-inset-bottom, 20px);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 680px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 4px;
+        }
+        .header-icon { font-size: 28px; flex-shrink: 0; }
+        .header-info { flex: 1; min-width: 0; }
+        .header-title { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+        .header-subtitle { font-size: 0.8rem; color: var(--text-secondary); margin-top: -2px; }
+
+        .status-dot {
+            width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+            transition: all var(--transition); background: #c0c4d0;
+        }
+        .status-dot.running { background: var(--success); animation: pulse-dot 2s infinite; }
+        .status-dot.paused { background: var(--warning); }
+        .status-dot.stopped { background: #c0c4d0; }
+        @keyframes pulse-dot { 0%,100% { box-shadow: 0 0 0 0 var(--success); } 50% { box-shadow: 0 0 0 10px transparent; } }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--radius-lg);
+            padding: 18px 16px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border);
+            transition: all var(--transition);
+        }
+        @media (min-width: 600px) { .card { padding: 22px 20px; } }
+
+        .card-title {
+            font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 14px;
+            display: flex; align-items: center; gap: 8px;
+        }
+
+        .form-group { margin-bottom: 13px; }
+        .form-label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 5px; }
+        .form-label .hint { font-weight: 400; color: var(--text-secondary); font-size: 0.75rem; }
+        .form-input {
+            width: 100%; padding: 11px 14px; font-size: 0.9rem; font-family: var(--font-sans);
+            border: 2px solid var(--border); border-radius: var(--radius); background: var(--bg);
+            color: var(--text); transition: all var(--transition); outline: none; -webkit-appearance: none;
+        }
+        .form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,110,247,0.1); background: var(--card-bg); }
+        .form-input.input-url { font-family: var(--font-mono); font-size: 0.82rem; }
+        .form-input.input-keywords { font-family: var(--font-mono); font-size: 0.85rem; }
+        .form-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .form-row .form-group { flex: 1; min-width: 120px; margin-bottom: 0; }
+
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            padding: 10px 16px; font-size: 0.85rem; font-weight: 600; border-radius: var(--radius);
+            border: none; cursor: pointer; transition: all var(--transition); white-space: nowrap;
+            min-height: 44px; user-select: none; position: relative; overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn:active { transform: scale(0.96); }
+        .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(79,110,247,0.3); }
+        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-outline { background: transparent; color: var(--text); border: 2px solid var(--border); }
+        .btn-outline:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+        .btn-sm { padding: 8px 12px; font-size: 0.78rem; min-height: 36px; border-radius: var(--radius-sm); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn-group .btn { flex: 1; min-width: 90px; }
+
+        .status-bar { display: flex; gap: 10px; flex-wrap: wrap; }
+        .status-item {
+            flex: 1; min-width: 80px; background: var(--bg); border-radius: var(--radius);
+            padding: 10px 8px; text-align: center;
+        }
+        .status-item .value { font-size: 1.1rem; font-weight: 700; font-family: var(--font-mono); }
+        .status-item .label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; }
+        .status-item.countdown .value { color: var(--primary); font-weight: 700; letter-spacing: 0.02em; }
+
+        .log-container {
+            max-height: 260px; overflow-y: auto; border-radius: var(--radius);
+            background: var(--bg); border: 1px solid var(--border);
+            -webkit-overflow-scrolling: touch; scroll-behavior: smooth;
+        }
+        @media (min-width: 600px) { .log-container { max-height: 320px; } }
+        .log-empty { padding: 30px 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; }
+        .log-entry {
+            padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.8rem;
+            font-family: var(--font-mono); line-height: 1.5; display: flex; gap: 10px; align-items: flex-start;
+        }
+        .log-time { color: var(--text-secondary); white-space: nowrap; font-size: 0.72rem; flex-shrink: 0; }
+        .log-msg { flex: 1; word-break: break-all; }
+        .highlight-change { color: var(--warning); font-weight: 600; }
+        .highlight-match { color: var(--success); font-weight: 600; }
+        .highlight-error { color: var(--danger); font-weight: 600; }
+
+        .toast {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%) translateY(-120px);
+            background: #1a1a2e; color: #fff; padding: 12px 24px; border-radius: 25px;
+            font-size: 0.85rem; font-weight: 600; z-index: 999; pointer-events: none;
+            transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: var(--shadow-lg); max-width: 90vw; text-align: center;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+        .toast.success { background: #059669; }
+        .toast.error { background: #dc2626; }
+
+        .import-export-group {
+            display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end;
+        }
+        .btn-file { display: none; }
+
+        .server-badge {
+            background: var(--primary-light);
+            color: var(--primary);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        @media (max-width: 400px) {
+            .btn { padding: 10px 8px; font-size: 0.78rem; }
+            .form-row { flex-direction: column; gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div class="header-icon">🔍</div>
+        <div class="header-info">
+            <div class="header-title">网页变动监控器 <span class="server-badge">服务端</span></div>
+            <div class="header-subtitle" id="headerStatus">正在连接服务器...</div>
+        </div>
+        <div class="status-dot stopped" id="statusDot"></div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">⚙️ 监控配置</div>
+        <div class="form-group">
+            <label class="form-label" for="proxyUrl">代理地址 <span class="hint">（留空则直连，默认自动切换备用代理）</span></label>
+            <input type="text" class="form-input input-url" id="proxyUrl" value="https://api.allorigins.win/raw?url=">
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="targetUrl">目标网址</label>
+            <input type="url" class="form-input input-url" id="targetUrl" placeholder="https://example.com" autocomplete="url">
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="keywords">关键词（空格分隔，需同时满足）</label>
+            <input type="text" class="form-input input-keywords" id="keywords" placeholder="例如：上新 降价">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label" for="intervalMinutes">检查间隔（分钟）</label>
+                <input type="number" class="form-input" id="intervalMinutes" value="5" min="1" max="1440" step="1">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="pushdeerKey">PushDeer Key（可选）</label>
+                <input type="text" class="form-input" id="pushdeerKey" placeholder="PDUxxxx...">
+            </div>
+        </div>
+        <div class="import-export-group">
+            <button class="btn btn-outline btn-sm" id="btnExport">📤 导出配置</button>
+            <button class="btn btn-outline btn-sm" id="btnImport">📥 导入配置</button>
+            <input type="file" id="importFile" class="btn-file" accept=".json">
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">🎮 控制</div>
+        <div class="btn-group">
+            <button class="btn btn-primary" id="btnStart">▶ 开始监控</button>
+            <button class="btn btn-outline" id="btnPause" disabled>⏸ 暂停</button>
+            <button class="btn btn-outline btn-sm" id="btnReset">🔄 重置基准</button>
+            <button class="btn btn-outline btn-sm" id="btnTestPush">🔔 测试推送</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">📊 状态</div>
+        <div class="status-bar">
+            <div class="status-item"><div class="value" id="statusChecks">0</div><div class="label">检查次数</div></div>
+            <div class="status-item"><div class="value" id="statusChanges">0</div><div class="label">变化次数</div></div>
+            <div class="status-item"><div class="value" id="statusLastCheck">--:--</div><div class="label">上次检查</div></div>
+            <div class="status-item countdown"><div class="value" id="statusNextCheck">--:--</div><div class="label">下次检查</div></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">📋 日志 <button class="btn btn-outline btn-sm" id="btnClearLog" style="margin-left:auto;">清空</button></div>
+        <div class="log-container" id="logContainer">
+            <div class="log-empty" id="logEmpty">日志将在此显示…</div>
+        </div>
+    </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function() {
+    const $ = (s) => document.getElementById(s);
+    const proxyUrl = $('proxyUrl'), targetUrl = $('targetUrl'), keywords = $('keywords'),
+        intervalMinutes = $('intervalMinutes'), pushdeerKey = $('pushdeerKey');
+    const btnStart = $('btnStart'), btnPause = $('btnPause'), btnReset = $('btnReset'),
+        btnTestPush = $('btnTestPush'), btnClearLog = $('btnClearLog');
+    const statusDot = $('statusDot'), headerStatus = $('headerStatus');
+    const logContainer = $('logContainer'), logEmpty = $('logEmpty'), toast = $('toast');
+    const statusChecks = $('statusChecks'), statusChanges = $('statusChanges'),
+        statusLastCheck = $('statusLastCheck'), statusNextCheck = $('statusNextCheck');
+    const btnExport = $('btnExport'), btnImport = $('btnImport'), importFile = $('importFile');
+
+    const MAX_LOGS = 80;
+    let state = {};
+    let countdownTimer = null;
+    let toastTimer = null;
+    let eventSource = null;
+
+    function formatTime(timestamp) {
+        if (!timestamp) return '--:--';
+        const d = new Date(timestamp);
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+    }
+
+    async function api(endpoint, options = {}) {
+        try {
+            const res = await fetch(`/api${endpoint}`, {
+                headers: { 'Content-Type': 'application/json' },
+                ...options
+            });
+            return await res.json();
+        } catch (e) {
+            return { success: false, message: e.message };
+        }
+    }
+
+    async function loadState() {
+        const result = await api('/state');
+        if (result && result.targetUrl !== undefined) {
+            state = result;
+            updateUI();
+            connectSSE();
+        } else {
+            headerStatus.textContent = '连接失败，请刷新页面';
+        }
+    }
+
+    function connectSSE() {
+        if (eventSource) eventSource.close();
+        eventSource = new EventSource('/api/events');
+        eventSource.onmessage = (e) => {
+            try {
+                state = JSON.parse(e.data);
+                updateUI();
+            } catch (err) {}
+        };
+        eventSource.onerror = () => {
+            eventSource.close();
+            setTimeout(connectSSE, 3000);
+        };
+    }
+
+    function renderLogs() {
+        if (!state.logs || !state.logs.length) {
+            logEmpty.style.display = 'block';
+            logContainer.querySelectorAll('.log-entry').forEach(e => e.remove());
+            return;
+        }
+        logEmpty.style.display = 'none';
+        const currentScroll = logContainer.scrollTop;
+        const atBottom = (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight) < 40;
+        logContainer.querySelectorAll('.log-entry').forEach(e => e.remove());
+
+        state.logs.slice(-MAX_LOGS).forEach(l => {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.innerHTML = `<span class="log-time">${formatTime(l.time)}</span><span class="log-msg">${escapeHtml(l.msg)}</span>`;
+            logContainer.appendChild(div);
+        });
+        logContainer.scrollTop = atBottom ? logContainer.scrollHeight : currentScroll;
+    }
+
+    function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function showToast(msg, type = '') {
+        if (toastTimer) clearTimeout(toastTimer);
+        toast.textContent = msg; toast.className = `toast ${type} show`;
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function updateStatus() {
+        statusChecks.textContent = state.totalChecks || 0;
+        statusChanges.textContent = state.totalChanges || 0;
+        statusLastCheck.textContent = state.lastCheckTime ? formatTime(state.lastCheckTime) : '--:--';
+        updateDot();
+    }
+
+    function updateCountdown() {
+        if (countdownTimer) clearInterval(countdownTimer);
+        if (!state.nextCheckTime || !state.isRunning || state.isPaused) {
+            statusNextCheck.textContent = '--:--';
+            return;
+        }
+        countdownTimer = setInterval(() => {
+            if (!state.nextCheckTime || !state.isRunning || state.isPaused) {
+                statusNextCheck.textContent = '--:--';
+                return;
+            }
+            const remain = Math.max(0, state.nextCheckTime - Date.now());
+            const mins = Math.floor(remain / 60000);
+            const secs = Math.floor((remain % 60000) / 1000);
+            statusNextCheck.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
+        }, 200);
+    }
+
+    function updateDot() {
+        statusDot.className = 'status-dot ' + (state.isRunning && !state.isPaused ? 'running' : state.isPaused ? 'paused' : 'stopped');
+    }
+
+    function updateUI() {
+        proxyUrl.value = state.proxyUrl || '';
+        targetUrl.value = state.targetUrl || '';
+        keywords.value = state.keywords || '';
+        intervalMinutes.value = state.intervalMinutes || 5;
+        pushdeerKey.value = state.pushdeerKey || '';
+
+        btnStart.textContent = state.isPaused ? '▶ 继续' : '▶ 开始监控';
+        btnStart.disabled = state.isRunning && !state.isPaused;
+        btnPause.disabled = !(state.isRunning && !state.isPaused);
+
+        const statusText = state.isRunning && !state.isPaused
+            ? `运行中 · 间隔${state.intervalMinutes}分钟`
+            : state.isPaused ? '已暂停' : '就绪 · 多代理自动切换';
+        headerStatus.textContent = statusText;
+
+        updateStatus();
+        updateCountdown();
+        renderLogs();
+    }
+
+    async function saveConfig() {
+        await api('/config', {
+            method: 'POST',
+            body: JSON.stringify({
+                proxyUrl: proxyUrl.value.trim(),
+                targetUrl: targetUrl.value.trim(),
+                keywords: keywords.value.trim(),
+                intervalMinutes: intervalMinutes.value,
+                pushdeerKey: pushdeerKey.value.trim()
+            })
+        });
+    }
+
+    async function start() {
+        if (!targetUrl.value.trim().startsWith('http')) {
+            showToast('请输入有效网址', 'error');
+            return;
+        }
+        await saveConfig();
+        const result = await api('/start', { method: 'POST' });
+        if (result.success) {
+            showToast('监控已启动', 'success');
+        } else {
+            showToast(result.message || '启动失败', 'error');
+        }
+    }
+
+    async function pause() {
+        const result = await api('/pause', { method: 'POST' });
+        if (result.success) showToast('已暂停', 'success');
+    }
+
+    async function resume() {
+        const result = await api('/resume', { method: 'POST' });
+        if (result.success) showToast('已恢复', 'success');
+    }
+
+    async function resetBaseline() {
+        const result = await api('/reset', { method: 'POST' });
+        if (result.success) showToast('基准已重置', 'success');
+    }
+
+    async function testPush() {
+        const result = await api('/test-push', { method: 'POST' });
+        if (result.success) showToast('测试推送已发送', 'success');
+        else showToast(result.message || '推送失败', 'error');
+    }
+
+    async function clearLogs() {
+        const result = await api('/clear-logs', { method: 'POST' });
+        if (result.success) {
+            state.logs = [];
+            renderLogs();
+        }
+    }
+
+    function exportConfig() {
+        window.location.href = '/api/export';
+    }
+
+    async function importConfig(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+            try {
+                const config = JSON.parse(ev.target.result);
+                const result = await api('/import', {
+                    method: 'POST',
+                    body: JSON.stringify(config)
+                });
+                if (result.success) {
+                    showToast('配置已导入', 'success');
+                    await loadState();
+                } else {
+                    showToast(result.message || '导入失败', 'error');
+                }
+            } catch (ex) {
+                showToast('文件格式错误', 'error');
+            }
+        };
+        reader.readAsText(file);
+        importFile.value = '';
+    }
+
+    btnStart.addEventListener('click', () => state.isPaused ? resume() : start());
+    btnPause.addEventListener('click', pause);
+    btnReset.addEventListener('click', resetBaseline);
+    btnTestPush.addEventListener('click', testPush);
+    btnClearLog.addEventListener('click', clearLogs);
+    btnExport.addEventListener('click', exportConfig);
+    btnImport.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', importConfig);
+
+    [proxyUrl, targetUrl, keywords, intervalMinutes, pushdeerKey].forEach(el => {
+        el.addEventListener('change', saveConfig);
+    });
+
+    loadState();
+})();
+</script>
+</body>
+</html>

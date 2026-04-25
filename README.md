@@ -13,9 +13,10 @@ docker run -d --name wyjk -p 6822:6822 -v $(pwd)/data:/app/data -e TZ=Asia/Shang
 ```
 
 ## 📝 更新日志
-- v1.00 (2024-04-24)
-- v1.01 (2024-04-24)
-
+- v1.00 (2026-04-24)
+- v1.01 (2026-04-24)
+- v1.02 (2026-04-25)上下文版本
+- 
 ## ⭐ 项目地址
 - https://github.com/cunpeng/wyjk
 

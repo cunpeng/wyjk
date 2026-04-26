@@ -9,13 +9,14 @@
 ## 🐳 Docker部署
 Docker Run
 ```
-docker run -d --name wyjk -p 6822:6822 -v $(pwd)/data:/app/data -e TZ=Asia/Shanghai -e PORT=6822 --restart unless-stopped cunpeng/wyjk:1.02
+docker run -d --name wyjk -p 6822:6822 -v $(pwd)/data:/app/data -e TZ=Asia/Shanghai -e PORT=6822 --restart unless-stopped cunpeng/wyjk:1.03
 ```
 
 ## 📝 更新日志
 - v1.00 (2026-04-24)
 - v1.01 (2026-04-24)
 - v1.02 (2026-04-25)上下文版本
+- v1.03 (2026-04-26)重置修正
 
 ## ⭐ 项目地址
 - https://github.com/cunpeng/wyjk

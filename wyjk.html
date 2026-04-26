@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover, maximum-scale=1.0, minimum-scale=1.0">
-    <title>网页变动监控器 · 多代理版</title>
+    <title>网页变动监控器</title>
     <style>
         :root {
             --bg: #f5f6f8;
@@ -265,455 +265,609 @@
 <div class="toast" id="toast"></div>
 
 <script>
-    (function() {
-        const $ = (s) => document.getElementById(s);
-        const proxyUrl = $('proxyUrl'), targetUrl = $('targetUrl'), keywords = $('keywords'),
-            intervalMinutes = $('intervalMinutes'), pushdeerKey = $('pushdeerKey');
-        const btnStart = $('btnStart'), btnPause = $('btnPause'), btnReset = $('btnReset'),
-            btnTestPush = $('btnTestPush'), btnClearLog = $('btnClearLog');
-        const statusDot = $('statusDot'), headerStatus = $('headerStatus');
-        const logContainer = $('logContainer'), logEmpty = $('logEmpty'), toast = $('toast');
-        const statusChecks = $('statusChecks'), statusChanges = $('statusChanges'),
-            statusLastCheck = $('statusLastCheck'), statusNextCheck = $('statusNextCheck');
-        const btnExport = $('btnExport'), btnImport = $('btnImport'), importFile = $('importFile');
+(function() {
+    const $ = (s) => document.getElementById(s);
+    const proxyUrl = $('proxyUrl'), targetUrl = $('targetUrl'), keywords = $('keywords'),
+        intervalMinutes = $('intervalMinutes'), pushdeerKey = $('pushdeerKey');
+    const btnStart = $('btnStart'), btnPause = $('btnPause'), btnReset = $('btnReset'),
+        btnTestPush = $('btnTestPush'), btnClearLog = $('btnClearLog');
+    const statusDot = $('statusDot'), headerStatus = $('headerStatus');
+    const logContainer = $('logContainer'), logEmpty = $('logEmpty'), toast = $('toast');
+    const statusChecks = $('statusChecks'), statusChanges = $('statusChanges'),
+        statusLastCheck = $('statusLastCheck'), statusNextCheck = $('statusNextCheck');
+    const btnExport = $('btnExport'), btnImport = $('btnImport'), importFile = $('importFile');
 
-        const STORAGE_KEY = 'web_monitor_v7_stable_ui';
-        const MAX_LOGS = 80;
-        const BACKUP_PROXIES = [
-            'https://api.allorigins.win/raw?url=',
-            'https://api.codetabs.com/v1/proxy?quest=',
-            'https://corsproxy.io/?url='
-        ];
+    const STORAGE_KEY = 'web_monitor_v8_context';
+    const MAX_LOGS = 80;
+    const BACKUP_PROXIES = [
+        'https://api.allorigins.win/raw?url=',
+        'https://api.codetabs.com/v1/proxy?quest=',
+        'https://corsproxy.io/?url='
+    ];
 
-        let state = {
-            proxyUrl: 'https://api.allorigins.win/raw?url=',
-            targetUrl: '', keywords: '', intervalMinutes: 5, pushdeerKey: '',
-            isRunning: false, isPaused: false,
-            baselineHash: null, baselineLength: 0,
-            totalChecks: 0, totalChanges: 0,
-            lastCheckTime: null, nextCheckTime: null,
-            logs: []
-        };
-        let checkTimer = null, countdownTimer = null, isChecking = false, toastTimer = null;
+    let state = {
+        proxyUrl: 'https://api.allorigins.win/raw?url=',
+        targetUrl: '',
+        keywords: '',
+        intervalMinutes: 5,
+        pushdeerKey: '',
+        isRunning: false,
+        isPaused: false,
+        baselineHash: null,
+        baselineLength: 0,
+        totalChecks: 0,
+        totalChanges: 0,
+        lastCheckTime: null,
+        nextCheckTime: null,
+        logs: [],
+        knownContexts: {}
+    };
+    let checkTimer = null, countdownTimer = null, isChecking = false, toastTimer = null;
 
-        function saveState() {
+    function saveState() {
+        try {
+            const toSave = { ...state, isRunning: false, isPaused: false, logs: state.logs.slice(-MAX_LOGS) };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+        } catch(e) {}
+    }
+
+    function loadState() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const saved = JSON.parse(raw);
+                Object.assign(state, saved);
+                state.isRunning = false;
+                state.isPaused = false;
+                state.nextCheckTime = null;
+                state.logs = Array.isArray(saved.logs) ? saved.logs.slice(-MAX_LOGS) : [];
+                return true;
+            }
+        } catch(e) {}
+        return false;
+    }
+
+    function addLog(type, msg) {
+        state.logs.push({ type, msg, time: Date.now() });
+        if (state.logs.length > MAX_LOGS) state.logs = state.logs.slice(-MAX_LOGS);
+        renderLogs();
+        saveState();
+    }
+
+    function renderLogs() {
+        if (!state.logs.length) { logEmpty.style.display = 'block'; logContainer.querySelectorAll('.log-entry').forEach(e=>e.remove()); return; }
+        logEmpty.style.display = 'none';
+        const currentScroll = logContainer.scrollTop;
+        const atBottom = (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight) < 40;
+        logContainer.querySelectorAll('.log-entry').forEach(e=>e.remove());
+        state.logs.forEach(l => {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const t = new Date(l.time);
+            const timeStr = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+            div.innerHTML = `<span class="log-time">${timeStr}</span><span class="log-msg">${escapeHtml(l.msg)}</span>`;
+            logContainer.appendChild(div);
+        });
+        logContainer.scrollTop = atBottom ? logContainer.scrollHeight : currentScroll;
+    }
+
+    function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function showToast(msg, type='') {
+        if (toastTimer) clearTimeout(toastTimer);
+        toast.textContent = msg; toast.className = `toast ${type} show`;
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function computeHash(str) {
+        let hash = 5381;
+        for (let i=0; i<str.length; i++) hash = ((hash<<5)+hash+str.charCodeAt(i)) & 0x7fffffff;
+        return hash.toString(36);
+    }
+
+    function extractText(html) {
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            return (doc.body?.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+        } catch(e) {
+            return html.replace(/<[^>]*>/g, ' ').replace(/[\s\n\r\t]+/g, ' ').trim();
+        }
+    }
+
+    function sanitizeForComparison(text, forHash = true) {
+        let clean = text;
+        clean = clean.replace(/\d{4}-\d{2}-\d{2}/g, '');
+        clean = clean.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '');
+        if (forHash) clean = clean.replace(/\d+/g, '');
+        return clean.replace(/[\s\n\r\t]+/g, ' ').trim();
+    }
+
+    async function tryFetchWithProxy(rawUrl, proxyTemplate) {
+        let url = rawUrl.trim();
+        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+        const encodedUrl = encodeURIComponent(url);
+        const finalUrl = proxyTemplate + encodedUrl;
+        const ctrl = new AbortController();
+        const id = setTimeout(() => ctrl.abort(), 25000);
+        const res = await fetch(finalUrl, {
+            signal: ctrl.signal,
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WebMonitor/1.0)' }
+        });
+        clearTimeout(id);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.text();
+    }
+
+    async function fetchPage(url) {
+        const customProxy = state.proxyUrl.trim();
+        const proxies = customProxy
+            ? [customProxy, ...BACKUP_PROXIES.filter(p => p !== customProxy)]
+            : BACKUP_PROXIES;
+
+        for (const proxy of proxies) {
             try {
-                const toSave = { ...state, isRunning: false, isPaused: false, logs: state.logs.slice(-MAX_LOGS) };
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
-            } catch(e) {}
-        }
-
-        function loadState() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (raw) {
-                    const saved = JSON.parse(raw);
-                    Object.assign(state, saved);
-                    state.isRunning = false; state.isPaused = false;
-                    state.nextCheckTime = null;
-                    state.logs = Array.isArray(saved.logs) ? saved.logs.slice(-MAX_LOGS) : [];
-                    return true;
-                }
-            } catch(e) {}
-            return false;
-        }
-
-        function addLog(type, msg) {
-            state.logs.push({ type, msg, time: Date.now() });
-            if (state.logs.length > MAX_LOGS) state.logs = state.logs.slice(-MAX_LOGS);
-            renderLogs(); saveState();
-        }
-
-        function renderLogs() {
-            if (!state.logs.length) { logEmpty.style.display = 'block'; logContainer.querySelectorAll('.log-entry').forEach(e=>e.remove()); return; }
-            logEmpty.style.display = 'none';
-            const currentScroll = logContainer.scrollTop;
-            const atBottom = (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight) < 40;
-            logContainer.querySelectorAll('.log-entry').forEach(e=>e.remove());
-            state.logs.forEach(l => {
-                const div = document.createElement('div');
-                div.className = 'log-entry';
-                const t = new Date(l.time);
-                const timeStr = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
-                div.innerHTML = `<span class="log-time">${timeStr}</span><span class="log-msg">${escapeHtml(l.msg)}</span>`;
-                logContainer.appendChild(div);
-            });
-            logContainer.scrollTop = atBottom ? logContainer.scrollHeight : currentScroll;
-        }
-
-        function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-        function showToast(msg, type='') {
-            if (toastTimer) clearTimeout(toastTimer);
-            toast.textContent = msg; toast.className = `toast ${type} show`;
-            toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
-        }
-
-        function computeHash(str) {
-            let hash = 5381;
-            for (let i=0; i<str.length; i++) hash = ((hash<<5)+hash+str.charCodeAt(i)) & 0x7fffffff;
-            return hash.toString(36);
-        }
-
-        function extractText(html) {
-            try {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                return (doc.body?.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
-            } catch(e) {
-                return html.replace(/<[^>]*>/g, ' ').replace(/[\s\n\r\t]+/g, ' ').trim();
+                const html = await tryFetchWithProxy(url, proxy);
+                return { success: true, html, proxyUsed: proxy };
+            } catch (err) {
+                console.warn(`代理 ${proxy} 失败: ${err.message}`);
+                continue;
             }
         }
-
-        function sanitizeForComparison(text, forHash = true) {
-            let clean = text;
-            clean = clean.replace(/\d{4}-\d{2}-\d{2}/g, '');
-            clean = clean.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '');
-            if (forHash) clean = clean.replace(/\d+/g, '');
-            return clean.replace(/[\s\n\r\t]+/g, ' ').trim();
-        }
-
-        async function tryFetchWithProxy(rawUrl, proxyTemplate) {
-            let url = rawUrl.trim();
-            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-            const encodedUrl = encodeURIComponent(url);
-            const finalUrl = proxyTemplate + encodedUrl;
+        try {
+            let directUrl = url.trim();
+            if (!/^https?:\/\//i.test(directUrl)) directUrl = 'https://' + directUrl;
             const ctrl = new AbortController();
-            const id = setTimeout(() => ctrl.abort(), 25000);
-            const res = await fetch(finalUrl, {
+            const id = setTimeout(() => ctrl.abort(), 20000);
+            const res = await fetch(directUrl, {
                 signal: ctrl.signal,
                 headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WebMonitor/1.0)' }
             });
             clearTimeout(id);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.text();
+            const html = await res.text();
+            return { success: true, html, proxyUsed: '直连' };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    function checkKeywords(text, kwStr) {
+        if (!kwStr.trim()) return { allFound: true, missing: [], kwList: [], newContexts: {} };
+        const kwList = kwStr.trim().split(/\s+/).filter(k=>k);
+        const lower = text.toLowerCase();
+        const missing = kwList.filter(k => !lower.includes(k.toLowerCase()));
+
+        const newContexts = {};
+        const contextWindow = 30;
+
+        for (const kw of kwList) {
+            const kwLower = kw.toLowerCase();
+            let index = lower.indexOf(kwLower);
+            const contexts = [];
+
+            while (index !== -1) {
+                const start = Math.max(0, index - contextWindow);
+                const end = Math.min(text.length, index + kw.length + contextWindow);
+                const context = text.substring(start, end).replace(/\s+/g, ' ').trim();
+                if (context.length >= kw.length + 4) {
+                    contexts.push(context);
+                }
+                index = lower.indexOf(kwLower, index + 1);
+            }
+            newContexts[kw] = contexts;
         }
 
-        async function fetchPage(url) {
-            const customProxy = state.proxyUrl.trim();
-            const proxies = customProxy
-                ? [customProxy, ...BACKUP_PROXIES.filter(p => p !== customProxy)]
-                : BACKUP_PROXIES;
+        return { allFound: missing.length===0, missing, kwList, newContexts };
+    }
 
-            for (const proxy of proxies) {
-                try {
-                    const html = await tryFetchWithProxy(url, proxy);
-                    return { success: true, html, proxyUsed: proxy };
-                } catch (err) {
-                    console.warn(`代理 ${proxy} 失败: ${err.message}`);
-                    continue;
+    function findNewContexts(newContexts, knownContexts) {
+        const result = {};
+        for (const [kw, contexts] of Object.entries(newContexts)) {
+            const known = knownContexts[kw] || [];
+            const knownSet = new Set(known.map(c => c.substring(0, 20) + '|' + c.length));
+            const newOnes = contexts.filter(c => {
+                const key = c.substring(0, 20) + '|' + c.length;
+                return !knownSet.has(key);
+            });
+            if (newOnes.length > 0) {
+                result[kw] = newOnes;
+            }
+        }
+        return result;
+    }
+
+    function mergeContexts(existing, newContexts) {
+        const merged = { ...existing };
+        for (const [kw, contexts] of Object.entries(newContexts)) {
+            if (!merged[kw]) merged[kw] = [];
+            const knownSet = new Set(merged[kw].map(c => c.substring(0, 20) + '|' + c.length));
+            for (const c of contexts) {
+                const key = c.substring(0, 20) + '|' + c.length;
+                if (!knownSet.has(key)) {
+                    merged[kw].push(c);
+                    knownSet.add(key);
                 }
             }
-            // 所有代理失败，尝试直连
-            try {
-                let directUrl = url.trim();
-                if (!/^https?:\/\//i.test(directUrl)) directUrl = 'https://' + directUrl;
-                const ctrl = new AbortController();
-                const id = setTimeout(() => ctrl.abort(), 20000);
-                const res = await fetch(directUrl, {
-                    signal: ctrl.signal,
-                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WebMonitor/1.0)' }
-                });
-                clearTimeout(id);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const html = await res.text();
-                return { success: true, html, proxyUsed: '直连' };
-            } catch (err) {
-                return { success: false, error: err.message };
-            }
         }
+        return merged;
+    }
 
-        function checkKeywords(text, kwStr) {
-            if (!kwStr.trim()) return { allFound: true, missing: [], kwList: [] };
-            const kwList = kwStr.trim().split(/\s+/).filter(k=>k);
-            const lower = text.toLowerCase();
-            const missing = kwList.filter(k => !lower.includes(k.toLowerCase()));
-            return { allFound: missing.length===0, missing, kwList };
+    async function sendPushDeer(key, title, content) {
+        if (!key.trim()) return { success: false };
+        const params = new URLSearchParams({ pushkey: key.trim(), text: title, desp: content, type: 'text' });
+        const url = `https://api2.pushdeer.com/message/push?${params}`;
+        try {
+            await fetch(url, { mode: 'no-cors' });
+            return { success: true };
+        } catch(e) {
+            return { success: true };
         }
+    }
 
-        async function sendPushDeer(key, title, content) {
-            if (!key.trim()) return { success: false };
-            const params = new URLSearchParams({ pushkey: key.trim(), text: title, desp: content, type: 'text' });
-            const url = `https://api2.pushdeer.com/message/push?${params}`;
-            try {
-                await fetch(url, { mode: 'no-cors' });
-                return { success: true };
-            } catch(e) {
-                return { success: true };
-            }
+    function notifyBrowser(title, body) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try { new Notification(title, { body, tag: 'web-monitor' }); } catch(e) {}
         }
+    }
 
-        function notifyBrowser(title, body) {
-            if ('Notification' in window && Notification.permission === 'granted') {
-                try { new Notification(title, { body, tag: 'web-monitor' }); } catch(e) {}
-            }
-        }
+    function playBeep() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator(), gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.3);
+            osc.start(); osc.stop(ctx.currentTime+0.3);
+            setTimeout(() => { osc.disconnect(); gain.disconnect(); ctx.close().catch(()=>{}); }, 400);
+        } catch(e) {}
+    }
 
-        function playBeep() {
-            try {
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                const osc = ctx.createOscillator(), gain = ctx.createGain();
-                osc.connect(gain); gain.connect(ctx.destination);
-                osc.type = 'sine'; osc.frequency.setValueAtTime(880, ctx.currentTime);
-                gain.gain.setValueAtTime(0.2, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.3);
-                osc.start(); osc.stop(ctx.currentTime+0.3);
-                setTimeout(() => { osc.disconnect(); gain.disconnect(); ctx.close().catch(()=>{}); }, 400);
-            } catch(e) {}
-        }
-
-        async function performCheck(manual=false) {
-            if (isChecking || !state.targetUrl.trim()) return;
-            isChecking = true;
-            const url = state.targetUrl.trim();
-            try {
-                const result = await fetchPage(url);
-                if (!result.success) {
-                    addLog('error', `获取失败: ${result.error}`);
-                    state.lastCheckTime = Date.now(); state.totalChecks++;
-                } else {
-                    const rawText = extractText(result.html);
-                    const hashText = sanitizeForComparison(rawText, true);
-                    const displayText = sanitizeForComparison(rawText, false);
-                    const hash = computeHash(hashText);
-                    state.lastCheckTime = Date.now(); state.totalChecks++;
-
-                    const hasBaseline = state.baselineHash !== null;
-                    const changed = hasBaseline && (hash !== state.baselineHash);
-                    let shouldNotify = false;
-
-                    if (!hasBaseline) {
-                        state.baselineHash = hash;
-                        state.baselineLength = hashText.length;
-                        addLog('system', `📌 基准已建立（忽略数字后长度：${hashText.length}，通过: ${result.proxyUsed || '代理'}）`);
-                        if (manual) showToast('基准已建立', 'success');
-                    } else if (changed) {
-                        state.totalChanges++;
-                        const kw = checkKeywords(displayText, state.keywords);
-                        if (kw.allFound) {
-                            shouldNotify = true;
-                            addLog('change', `🔔 文本变化！关键词匹配：${kw.kwList.join(', ') || '无限制'}`);
-                        } else {
-                            addLog('change', `文本变化但关键词不匹配（缺失：${kw.missing.join(', ')}）`);
-                        }
-                        state.baselineHash = hash;
-                        state.baselineLength = hashText.length;
-                    } else {
-                        if (manual || state.totalChecks % 15 === 0) {
-                            addLog('info', '✅ 周期检查: 无变化');
-                        }
-                    }
-
-                    if (shouldNotify) {
-                        const title = `🔔 网页变动: ${url}`;
-                        const body = `匹配关键词: ${state.keywords || '无'}\n时间: ${new Date().toLocaleString()}`;
-                        notifyBrowser(title, body);
-                        playBeep();
-                        if (state.pushdeerKey.trim()) {
-                            const pushRes = await sendPushDeer(state.pushdeerKey, title, body);
-                            if (pushRes.success) addLog('push', '📤 推送已发送');
-                            else addLog('error', '推送失败');
-                        }
-                    }
-                }
-            } catch(e) {
-                addLog('error', `异常: ${e.message}`);
+    async function performCheck(manual=false) {
+        if (isChecking || !state.targetUrl.trim()) return;
+        isChecking = true;
+        const url = state.targetUrl.trim();
+        try {
+            const result = await fetchPage(url);
+            if (!result.success) {
+                addLog('error', `获取失败: ${result.error}`);
                 state.lastCheckTime = Date.now(); state.totalChecks++;
-            } finally {
-                isChecking = false;
-                updateStatus();
-                saveState();
-                if (state.isRunning && !state.isPaused) scheduleNext();
-                if (manual) updateUI();
-            }
-        }
-
-        function scheduleNext() {
-            if (checkTimer) clearTimeout(checkTimer);
-            if (!state.isRunning || state.isPaused) return;
-            const ms = state.intervalMinutes * 60000;
-            state.nextCheckTime = Date.now() + ms;
-            checkTimer = setTimeout(() => { if (state.isRunning && !state.isPaused) performCheck(); }, ms);
-            startCountdown();
-        }
-
-        function startCountdown() {
-            if (countdownTimer) clearInterval(countdownTimer);
-            countdownTimer = setInterval(() => {
-                if (!state.nextCheckTime || !state.isRunning || state.isPaused) {
-                    statusNextCheck.textContent = '--:--';
-                    return;
-                }
-                const remain = Math.max(0, state.nextCheckTime - Date.now());
-                const mins = Math.floor(remain / 60000);
-                const secs = Math.floor((remain % 60000) / 1000);
-                statusNextCheck.textContent = `${mins}:${String(secs).padStart(2,'0')}`;
-            }, 200);
-        }
-
-        function updateStatus() {
-            statusChecks.textContent = state.totalChecks;
-            statusChanges.textContent = state.totalChanges;
-            statusLastCheck.textContent = state.lastCheckTime ? new Date(state.lastCheckTime).toLocaleTimeString('zh-CN', {hour12:false}) : '--:--';
-            if (!state.isRunning || state.isPaused || !state.nextCheckTime) statusNextCheck.textContent = '--:--';
-            updateDot();
-        }
-
-        function updateDot() {
-            statusDot.className = 'status-dot ' + (state.isRunning && !state.isPaused ? 'running' : state.isPaused ? 'paused' : 'stopped');
-        }
-
-        function updateUI() {
-            proxyUrl.value = state.proxyUrl;
-            targetUrl.value = state.targetUrl; keywords.value = state.keywords;
-            intervalMinutes.value = state.intervalMinutes; pushdeerKey.value = state.pushdeerKey;
-            btnStart.textContent = state.isPaused ? '▶ 继续' : '▶ 开始监控';
-            btnStart.disabled = state.isRunning && !state.isPaused;
-            btnPause.disabled = !(state.isRunning && !state.isPaused);
-            headerStatus.textContent = state.isRunning && !state.isPaused ? `运行中 · 间隔${state.intervalMinutes}分钟` : state.isPaused ? '已暂停' : '就绪 · 多代理自动切换';
-            updateStatus();
-            renderLogs();
-        }
-
-        function start() {
-            if (!state.targetUrl.trim().startsWith('http')) { showToast('请输入有效网址', 'error'); return; }
-            state.isRunning = true; state.isPaused = false;
-            state.proxyUrl = proxyUrl.value.trim();
-            state.keywords = keywords.value.trim(); state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||5);
-            state.pushdeerKey = pushdeerKey.value.trim();
-            if ('Notification' in window) Notification.requestPermission();
-            updateUI(); saveState();
-            addLog('system', `🚀 监控启动（首选代理: ${state.proxyUrl || '直连'}）`);
-            performCheck(true);
-        }
-
-        function pause() {
-            state.isPaused = true;
-            if (checkTimer) clearTimeout(checkTimer);
-            state.nextCheckTime = null;
-            if (countdownTimer) clearInterval(countdownTimer);
-            updateUI(); saveState();
-            addLog('system', '⏸ 暂停');
-        }
-
-        function resume() {
-            state.isPaused = false;
-            updateUI(); saveState();
-            addLog('system', '▶ 恢复');
-            performCheck(true);
-        }
-
-        function resetBaseline() {
-            state.baselineHash = null; state.baselineLength = 0;
-            updateUI(); saveState();
-            addLog('system', '🔄 基准已重置');
-            if (state.isRunning && !state.isPaused) performCheck(true);
-        }
-
-        async function testPush() {
-            const key = pushdeerKey.value.trim();
-            if (!key) { showToast('先填写Key', 'error'); return; }
-            const res = await sendPushDeer(key, '🧪 测试', 'Web Monitor 测试消息');
-            if (res.success) {
-                showToast('测试推送已发送', 'success');
-                addLog('push', '📤 测试推送已发送');
             } else {
-                showToast('推送失败', 'error');
+                const rawText = extractText(result.html);
+                const hashText = sanitizeForComparison(rawText, true);
+                const displayText = sanitizeForComparison(rawText, false);
+                const hash = computeHash(hashText);
+                state.lastCheckTime = Date.now(); state.totalChecks++;
+
+                const hasBaseline = state.baselineHash !== null;
+                const changed = hasBaseline && (hash !== state.baselineHash);
+                let shouldNotify = false;
+                let newContextsFound = {};
+
+                if (!hasBaseline) {
+                    state.baselineHash = hash;
+                    state.baselineLength = hashText.length;
+                    const kw = checkKeywords(displayText, state.keywords);
+                    state.knownContexts = kw.newContexts;
+                    addLog('system', `📌 基准已建立（忽略数字后长度：${hashText.length}，通过: ${result.proxyUsed || '代理'}）`);
+                    if (Object.keys(state.knownContexts).length > 0) {
+                        addLog('system', `📌 关键词上下文已记录: ${Object.keys(state.knownContexts).join(', ')}`);
+                    }
+                    if (manual) showToast('基准已建立', 'success');
+                } else if (changed) {
+                    state.totalChanges++;
+                    const kw = checkKeywords(displayText, state.keywords);
+                    if (kw.allFound) {
+                        newContextsFound = findNewContexts(kw.newContexts, state.knownContexts);
+                        if (Object.keys(newContextsFound).length > 0) {
+                            shouldNotify = true;
+                            state.knownContexts = mergeContexts(state.knownContexts, kw.newContexts);
+                            const newContextSamples = [];
+                            for (const [kwWord, ctxs] of Object.entries(newContextsFound)) {
+                                newContextSamples.push(`${kwWord}: ${ctxs[0].substring(0, 50)}...`);
+                            }
+                            addLog('change', `🔔 新上下文出现：${newContextSamples.join(' | ')}`);
+                        } else {
+                            addLog('change', `文本变化但无新上下文（关键词已在已知位置）`);
+                        }
+                    } else {
+                        addLog('change', `文本变化但关键词不匹配（缺失：${kw.missing.join(', ')}）`);
+                    }
+                    state.baselineHash = hash;
+                    state.baselineLength = hashText.length;
+                } else {
+                    if (manual || state.totalChecks % 15 === 0) {
+                        addLog('info', '✅ 周期检查: 无变化');
+                    }
+                }
+
+                if (shouldNotify) {
+                    let body = `发现新上下文:\n`;
+                    for (const [kw, ctxs] of Object.entries(newContextsFound)) {
+                        body += `【${kw}】${ctxs[0]}\n`;
+                    }
+                    body += `\n时间: ${new Date().toLocaleString()}`;
+                    const title = `🔔 网页新内容: ${url}`;
+                    notifyBrowser(title, body);
+                    playBeep();
+                    if (state.pushdeerKey.trim()) {
+                        const pushRes = await sendPushDeer(state.pushdeerKey, title, body);
+                        if (pushRes.success) addLog('push', '📤 推送已发送');
+                        else addLog('error', '推送失败');
+                    }
+                }
+            }
+        } catch(e) {
+            addLog('error', `异常: ${e.message}`);
+            state.lastCheckTime = Date.now(); state.totalChecks++;
+        } finally {
+            isChecking = false;
+            updateStatus();
+            saveState();
+            if (state.isRunning && !state.isPaused) scheduleNext();
+            if (manual) updateUI();
+        }
+    }
+
+    function scheduleNext() {
+        if (checkTimer) clearTimeout(checkTimer);
+        if (!state.isRunning || state.isPaused) return;
+
+        const intervalMs = state.intervalMinutes * 60000;
+        state.nextCheckTime = Date.now() + intervalMs;
+
+        // 精确调度：使用短超时循环确保精度
+        function scheduleExact() {
+            if (!state.isRunning || state.isPaused) return;
+            const now = Date.now();
+            const remaining = state.nextCheckTime - now;
+
+            if (remaining <= 0) {
+                performCheck();
+            } else {
+                const timeout = Math.min(remaining, 500);
+                checkTimer = setTimeout(scheduleExact, timeout);
             }
         }
 
-        function exportConfig() {
-            const config = {
-                proxyUrl: proxyUrl.value.trim(),
-                targetUrl: targetUrl.value.trim(),
-                keywords: keywords.value.trim(),
-                intervalMinutes: intervalMinutes.value,
-                pushdeerKey: pushdeerKey.value.trim()
-            };
-            const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'web-monitor-config.json';
-            a.click();
-            showToast('配置已导出', 'success');
-        }
+        checkTimer = setTimeout(scheduleExact, 50);
+        startCountdown();
 
-        function importConfig(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                try {
-                    const config = JSON.parse(ev.target.result);
-                    proxyUrl.value = config.proxyUrl || 'https://api.allorigins.win/raw?url=';
-                    targetUrl.value = config.targetUrl || '';
-                    keywords.value = config.keywords || '';
-                    intervalMinutes.value = config.intervalMinutes || 5;
-                    pushdeerKey.value = config.pushdeerKey || '';
-                    state.proxyUrl = proxyUrl.value.trim();
-                    state.targetUrl = targetUrl.value.trim();
-                    state.keywords = keywords.value.trim();
-                    state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||5);
-                    state.pushdeerKey = pushdeerKey.value.trim();
-                    saveState();
-                    updateUI();
-                    showToast('配置已导入', 'success');
-                    addLog('system', '📥 配置已从文件导入');
-                } catch(ex) {
-                    showToast('文件格式错误', 'error');
-                }
-            };
-            reader.readAsText(file);
-            importFile.value = '';
-        }
+        // 更新 Web Worker
+        updateWorkerInterval();
+    }
 
-        // 事件绑定
-        btnStart.addEventListener('click', () => state.isPaused ? resume() : start());
-        btnPause.addEventListener('click', pause);
-        btnReset.addEventListener('click', resetBaseline);
-        btnTestPush.addEventListener('click', testPush);
-        btnClearLog.addEventListener('click', () => { state.logs = []; renderLogs(); saveState(); });
-        btnExport.addEventListener('click', exportConfig);
-        btnImport.addEventListener('click', () => importFile.click());
-        importFile.addEventListener('change', importConfig);
-
-        [proxyUrl, targetUrl, keywords, intervalMinutes, pushdeerKey].forEach(el => el.addEventListener('change', () => {
-            state.proxyUrl = proxyUrl.value.trim();
-            state.targetUrl = targetUrl.value.trim();
-            state.keywords = keywords.value.trim();
-            state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||1);
-            state.pushdeerKey = pushdeerKey.value.trim();
-            saveState();
-        }));
-
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && state.isRunning && !state.isPaused && state.lastCheckTime) {
-                const elapsed = Date.now() - state.lastCheckTime;
-                if (elapsed > state.intervalMinutes * 60000 * 0.8) {
-                    if (checkTimer) clearTimeout(checkTimer);
-                    performCheck();
-                }
+    function startCountdown() {
+        if (countdownTimer) clearInterval(countdownTimer);
+        countdownTimer = setInterval(() => {
+            if (!state.nextCheckTime || !state.isRunning || state.isPaused) {
+                statusNextCheck.textContent = '--:--';
+                return;
             }
-        });
+            const remain = Math.max(0, state.nextCheckTime - Date.now());
+            const mins = Math.floor(remain / 60000);
+            const secs = Math.floor((remain % 60000) / 1000);
+            statusNextCheck.textContent = `${mins}:${String(secs).padStart(2,'0')}`;
+        }, 200);
+    }
 
-        window.addEventListener('beforeunload', () => {
-            if (checkTimer) clearTimeout(checkTimer);
-            if (countdownTimer) clearInterval(countdownTimer);
-            state.isRunning = false; state.isPaused = false;
-            saveState();
-        });
+    function updateStatus() {
+        statusChecks.textContent = state.totalChecks;
+        statusChanges.textContent = state.totalChanges;
+        statusLastCheck.textContent = state.lastCheckTime ? new Date(state.lastCheckTime).toLocaleTimeString('zh-CN', {hour12:false}) : '--:--';
+        if (!state.isRunning || state.isPaused || !state.nextCheckTime) statusNextCheck.textContent = '--:--';
+        updateDot();
+    }
 
-        // 初始化
-        loadState();
-        proxyUrl.value = state.proxyUrl || 'https://api.allorigins.win/raw?url=';
-        targetUrl.value = state.targetUrl;
-        keywords.value = state.keywords;
-        intervalMinutes.value = state.intervalMinutes;
-        pushdeerKey.value = state.pushdeerKey;
-        updateUI();
+    function updateDot() {
+        statusDot.className = 'status-dot ' + (state.isRunning && !state.isPaused ? 'running' : state.isPaused ? 'paused' : 'stopped');
+    }
+
+    function updateUI() {
+        proxyUrl.value = state.proxyUrl;
+        targetUrl.value = state.targetUrl; keywords.value = state.keywords;
+        intervalMinutes.value = state.intervalMinutes; pushdeerKey.value = state.pushdeerKey;
+        btnStart.textContent = state.isPaused ? '▶ 继续' : '▶ 开始监控';
+        btnStart.disabled = state.isRunning && !state.isPaused;
+        btnPause.disabled = !(state.isRunning && !state.isPaused);
+        headerStatus.textContent = state.isRunning && !state.isPaused ? `运行中 · 间隔${state.intervalMinutes}分钟` : state.isPaused ? '已暂停' : '就绪 · 多代理自动切换';
+        updateStatus();
         renderLogs();
-        if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-    })();
+    }
+
+    function start() {
+        const urlValue = targetUrl.value.trim();
+        if (!urlValue.startsWith('http')) { showToast('请输入有效网址', 'error'); return; }
+        state.isRunning = true; state.isPaused = false;
+        state.targetUrl = urlValue;
+        state.proxyUrl = proxyUrl.value.trim();
+        state.keywords = keywords.value.trim(); state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||5);
+        state.pushdeerKey = pushdeerKey.value.trim();
+        initWorker();
+        if ('Notification' in window) Notification.requestPermission();
+        updateUI(); saveState();
+        addLog('system', `🚀 监控启动（首选代理: ${state.proxyUrl || '直连'}）`);
+        performCheck(true);
+    }
+
+    function pause() {
+        state.isPaused = true;
+        if (checkTimer) clearTimeout(checkTimer);
+        state.nextCheckTime = null;
+        if (countdownTimer) clearInterval(countdownTimer);
+        if (worker) worker.postMessage('stop');
+        updateUI(); saveState();
+        addLog('system', '⏸ 暂停');
+    }
+
+    function resume() {
+        state.isPaused = false;
+        updateUI(); saveState();
+        addLog('system', '▶ 恢复');
+        performCheck(true);
+    }
+
+    function resetBaseline() {
+        state.baselineHash = null;
+        state.baselineLength = 0;
+        state.knownContexts = {};
+        state.totalChecks = 0;
+        state.totalChanges = 0;
+        state.lastCheckTime = null;
+        state.nextCheckTime = null;
+        state.logs = [];
+        if (checkTimer) clearTimeout(checkTimer);
+        if (countdownTimer) clearInterval(countdownTimer);
+        updateUI(); saveState();
+        addLog('system', '🔄 基准、上下文和状态已重置');
+        if (state.isRunning && !state.isPaused) performCheck(true);
+    }
+
+    async function testPush() {
+        const key = pushdeerKey.value.trim();
+        if (!key) { showToast('先填写Key', 'error'); return; }
+        const res = await sendPushDeer(key, '🧪 测试', 'Web Monitor 测试消息');
+        if (res.success) {
+            showToast('测试推送已发送', 'success');
+            addLog('push', '📤 测试推送已发送');
+        } else {
+            showToast('推送失败', 'error');
+        }
+    }
+
+    function exportConfig() {
+        const config = {
+            proxyUrl: proxyUrl.value.trim(),
+            targetUrl: targetUrl.value.trim(),
+            keywords: keywords.value.trim(),
+            intervalMinutes: intervalMinutes.value,
+            pushdeerKey: pushdeerKey.value.trim()
+        };
+        const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'web-monitor-config.json';
+        a.click();
+        showToast('配置已导出', 'success');
+    }
+
+    function importConfig(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const config = JSON.parse(ev.target.result);
+                proxyUrl.value = config.proxyUrl || 'https://api.allorigins.win/raw?url=';
+                targetUrl.value = config.targetUrl || '';
+                keywords.value = config.keywords || '';
+                intervalMinutes.value = config.intervalMinutes || 5;
+                pushdeerKey.value = config.pushdeerKey || '';
+                state.proxyUrl = proxyUrl.value.trim();
+                state.targetUrl = targetUrl.value.trim();
+                state.keywords = keywords.value.trim();
+                state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||5);
+                state.pushdeerKey = pushdeerKey.value.trim();
+                saveState();
+                updateUI();
+                showToast('配置已导入', 'success');
+                addLog('system', '📥 配置已从文件导入');
+            } catch(ex) {
+                showToast('文件格式错误', 'error');
+            }
+        };
+        reader.readAsText(file);
+        importFile.value = '';
+    }
+
+    btnStart.addEventListener('click', () => state.isPaused ? resume() : start());
+    btnPause.addEventListener('click', pause);
+    btnReset.addEventListener('click', resetBaseline);
+    btnTestPush.addEventListener('click', testPush);
+    btnClearLog.addEventListener('click', () => { state.logs = []; renderLogs(); saveState(); });
+    btnExport.addEventListener('click', exportConfig);
+    btnImport.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', importConfig);
+
+    [proxyUrl, targetUrl, keywords, intervalMinutes, pushdeerKey].forEach(el => el.addEventListener('change', () => {
+        state.proxyUrl = proxyUrl.value.trim();
+        state.targetUrl = targetUrl.value.trim();
+        state.keywords = keywords.value.trim();
+        state.intervalMinutes = Math.max(1, parseInt(intervalMinutes.value)||1);
+        state.pushdeerKey = pushdeerKey.value.trim();
+        saveState();
+    }));
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && state.isRunning && !state.isPaused) {
+            // 页面恢复可见时，检查是否应该立即检查
+            if (state.nextCheckTime && Date.now() >= state.nextCheckTime) {
+                if (checkTimer) clearTimeout(checkTimer);
+                performCheck();
+            }
+        }
+    });
+
+    // 使用 Web Worker 增强后台定时器精度
+    let worker = null;
+    function initWorker() {
+        if (worker) return;
+        const code = `
+            let interval = 1000;
+            let timer;
+            function start(ms) {
+                if (timer) clearInterval(timer);
+                interval = ms;
+                timer = setInterval(() => {
+                    self.postMessage('tick');
+                }, interval);
+            }
+            self.onmessage = (e) => {
+                if (e.data === 'stop') {
+                    if (timer) clearInterval(timer);
+                } else if (e.data.interval) {
+                    start(e.data.interval);
+                }
+            };
+        `;
+        try {
+            worker = new Worker(URL.createObjectURL(new Blob([code], {type: 'text/javascript'})));
+            worker.onmessage = () => {
+                if (state.isRunning && !state.isPaused && state.nextCheckTime) {
+                    if (Date.now() >= state.nextCheckTime) {
+                        performCheck();
+                    }
+                }
+            };
+        } catch(e) {
+            console.warn('Web Worker 不可用，使用 setTimeout');
+        }
+    }
+
+    function updateWorkerInterval() {
+        if (worker && state.isRunning && !state.isPaused) {
+            worker.postMessage({ interval: 5000 }); // 每5秒检查一次
+        }
+    }
+
+    window.addEventListener('beforeunload', () => {
+        if (checkTimer) clearTimeout(checkTimer);
+        if (countdownTimer) clearInterval(countdownTimer);
+        state.isRunning = false; state.isPaused = false;
+        saveState();
+    });
+
+    loadState();
+    proxyUrl.value = state.proxyUrl || 'https://api.allorigins.win/raw?url=';
+    targetUrl.value = state.targetUrl;
+    keywords.value = state.keywords;
+    intervalMinutes.value = state.intervalMinutes;
+    pushdeerKey.value = state.pushdeerKey;
+    updateUI();
+    renderLogs();
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+})();
 </script>
 </body>
 </html>

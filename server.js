@@ -28,7 +28,8 @@ let state = {
     totalChanges: 0,
     lastCheckTime: null,
     nextCheckTime: null,
-    logs: []
+    logs: [],
+    knownContexts: {}  // 存储已知的关键词上下文: { "关键词A": ["...上下文1...", "...上下文2..."] }
 };
 
 let checkTimer = null;
@@ -111,11 +112,76 @@ function sanitizeForComparison(text, forHash = true) {
 }
 
 function checkKeywords(text, kwStr) {
-    if (!kwStr.trim()) return { allFound: true, missing: [], kwList: [] };
+    if (!kwStr.trim()) return { allFound: true, missing: [], kwList: [], newContexts: {} };
     const kwList = kwStr.trim().split(/\s+/).filter(k => k);
     const lower = text.toLowerCase();
     const missing = kwList.filter(k => !lower.includes(k.toLowerCase()));
-    return { allFound: missing.length === 0, missing, kwList };
+
+    // 提取每个关键词的上下文
+    const newContexts = {};
+    const contextWindow = 30; // 关键词前后各取30个字符作为上下文
+
+    for (const kw of kwList) {
+        const kwLower = kw.toLowerCase();
+        let index = lower.indexOf(kwLower);
+        const contexts = [];
+
+        while (index !== -1) {
+            const start = Math.max(0, index - contextWindow);
+            const end = Math.min(text.length, index + kw.length + contextWindow);
+            const context = text.substring(start, end).replace(/\s+/g, ' ').trim();
+
+            if (context.length >= kw.length + 4) { // 至少要有一些上下文
+                contexts.push(context);
+            }
+
+            index = lower.indexOf(kwLower, index + 1);
+        }
+
+        newContexts[kw] = contexts;
+    }
+
+    return { allFound: missing.length === 0, missing, kwList, newContexts };
+}
+
+// 检查是否有新的上下文出现
+function findNewContexts(newContexts, knownContexts) {
+    const result = {};
+
+    for (const [kw, contexts] of Object.entries(newContexts)) {
+        const known = knownContexts[kw] || [];
+        const knownSet = new Set(known.map(c => c.substring(0, 20) + '|' + c.length)); // 用前20字符+长度作为唯一标识
+        const newOnes = contexts.filter(c => {
+            const key = c.substring(0, 20) + '|' + c.length;
+            return !knownSet.has(key);
+        });
+
+        if (newOnes.length > 0) {
+            result[kw] = newOnes;
+        }
+    }
+
+    return result;
+}
+
+// 合并新旧上下文
+function mergeContexts(existing, newContexts) {
+    const merged = { ...existing };
+
+    for (const [kw, contexts] of Object.entries(newContexts)) {
+        if (!merged[kw]) merged[kw] = [];
+
+        const knownSet = new Set(merged[kw].map(c => c.substring(0, 20) + '|' + c.length));
+        for (const c of contexts) {
+            const key = c.substring(0, 20) + '|' + c.length;
+            if (!knownSet.has(key)) {
+                merged[kw].push(c);
+                knownSet.add(key);
+            }
+        }
+    }
+
+    return merged;
 }
 
 async function fetchWithProxy(rawUrl, proxyTemplate) {
@@ -222,20 +288,51 @@ async function performCheck() {
             const hasBaseline = state.baselineHash !== null;
             const changed = hasBaseline && (hash !== state.baselineHash);
             let shouldNotify = false;
+            let newContextsFound = {};
 
             if (!hasBaseline) {
+                // 首次建立基准
                 state.baselineHash = hash;
                 state.baselineLength = hashText.length;
+
+                // 初始化已知上下文
+                const kw = checkKeywords(displayText, state.keywords);
+                state.knownContexts = kw.newContexts;
+
                 addLog('system', `📌 基准已建立（长度: ${hashText.length}，代理: ${result.proxyUsed}）`);
+                if (Object.keys(state.knownContexts).length > 0) {
+                    addLog('system', `📌 关键词上下文已记录: ${Object.keys(state.knownContexts).join(', ')}`);
+                }
             } else if (changed) {
                 state.totalChanges++;
+
+                // 检查关键词及其上下文
                 const kw = checkKeywords(displayText, state.keywords);
+
                 if (kw.allFound) {
-                    shouldNotify = true;
-                    addLog('change', `🔔 文本变化！关键词匹配：${kw.kwList.join(', ') || '无限制'}`);
+                    // 查找新的上下文
+                    newContextsFound = findNewContexts(kw.newContexts, state.knownContexts);
+                    const hasNewContexts = Object.keys(newContextsFound).length > 0;
+
+                    if (hasNewContexts) {
+                        // 有新的上下文出现，推送通知
+                        shouldNotify = true;
+
+                        // 更新已知上下文
+                        state.knownContexts = mergeContexts(state.knownContexts, kw.newContexts);
+
+                        const newContextSamples = [];
+                        for (const [kwWord, contexts] of Object.entries(newContextsFound)) {
+                            newContextSamples.push(`${kwWord}: ${contexts[0].substring(0, 50)}...`);
+                        }
+                        addLog('change', `🔔 新上下文出现：${newContextSamples.join(' | ')}`);
+                    } else {
+                        addLog('change', `文本变化但无新上下文（关键词已在已知位置）`);
+                    }
                 } else {
                     addLog('change', `文本变化但关键词不匹配（缺失：${kw.missing.join(', ')}）`);
                 }
+
                 state.baselineHash = hash;
                 state.baselineLength = hashText.length;
             } else {
@@ -245,11 +342,14 @@ async function performCheck() {
             }
 
             if (shouldNotify) {
-                const title = `🔔 网页变动: ${url}`;
-                const body = `匹配关键词: ${state.keywords || '无'}\n时间: ${getDate()}`;
+                let body = `发现新上下文:\n`;
+                for (const [kw, contexts] of Object.entries(newContextsFound)) {
+                    body += `【${kw}】${contexts[0]}\n`;
+                }
+                body += `\n时间: ${getDate()}`;
 
                 if (state.pushdeerKey.trim()) {
-                    const pushRes = await sendPushDeer(state.pushdeerKey, title, body);
+                    const pushRes = await sendPushDeer(state.pushdeerKey, `🔔 网页新内容`, body);
                     if (pushRes.success) addLog('push', '📤 推送已发送');
                     else addLog('error', '推送失败');
                 }
@@ -319,8 +419,14 @@ function resume() {
 function resetBaseline() {
     state.baselineHash = null;
     state.baselineLength = 0;
+    state.knownContexts = {};
+    state.totalChecks = 0;
+    state.totalChanges = 0;
+    state.lastCheckTime = null;
+    state.nextCheckTime = null;
+    state.logs = [];
     saveState();
-    addLog('system', '🔄 基准已重置');
+    addLog('system', '🔄 基准和上下文已重置');
     if (state.isRunning && !state.isPaused) performCheck();
     return { success: true };
 }

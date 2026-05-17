@@ -1,9 +1,13 @@
-name: Docker Build and Push
+name: Docker Build and Push (Manual Version)
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本号（例如 1.04）'
+        required: true
+        default: '1.04'
+        type: string
 
 jobs:
   build:
@@ -21,7 +25,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: cunpeng
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push multi-platform
@@ -31,7 +35,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            cunpeng/wyjk:1.04
-            cunpeng/wyjk:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/wyjk:${{ github.event.inputs.version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/wyjk:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -1,7 +1,10 @@
-FROM node:18-alpine
+# 支持 amd64 和 arm64 多架构构建
+FROM --platform=$TARGETOS/$TARGETARCH node:18-alpine
 
 LABEL maintainer="wyjk"
 LABEL description="网页变动监控器"
+LABEL version="1.04"
+LABEL org.opencontainers.image.source="https://github.com/yourusername/wyjk"
 
 WORKDIR /app
 

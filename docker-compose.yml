@@ -2,11 +2,14 @@ version: '3.8'
 
 services:
   wyjk:
-    image: wyjk:latest
+    image: wyjk:1.04
     container_name: wyjk
     build:
       context: .
       dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
     ports:
       - "6822:6822"
     environment:

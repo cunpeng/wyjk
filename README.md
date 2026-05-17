@@ -9,7 +9,7 @@
 ## 🐳 Docker部署
 Docker Run
 ```
-docker run -d --name wyjk -p 6822:6822 -v $(pwd)/data:/app/data -e TZ=Asia/Shanghai -e PORT=6822 --restart unless-stopped cunpeng/wyjk:1.03
+docker run -d --name wyjk -p 6822:6822 -v $(pwd)/data:/app/data -e TZ=Asia/Shanghai -e PORT=6822 --restart unless-stopped cunpeng/wyjk:1.04
 ```
 
 ## 📝 更新日志
